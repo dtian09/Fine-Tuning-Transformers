@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader, Subset, Dataset
 from torchvision import transforms
 from PIL import Image
 from datasets import load_dataset, load_from_disk
@@ -15,7 +15,9 @@ from tqdm import tqdm
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 BATCH_SIZE = 4
 MAX_CAPTION_LEN = 32
-PERCENTAGE = 0.1  # Use 10% of the training data
+PERCENTAGE = 0.1
+model_id = "NousResearch/Llama-2-7b-chat-hf"
+HF_TOKEN = "hf_YOUR_TOKEN_HERE"  # Replace with actual token
 
 # --- Initialize Weights & Biases ---
 wandb.init(
@@ -27,24 +29,24 @@ wandb.init(
     "percentage_used": PERCENTAGE,
     "tuning_method": "LoRA",
     "embedding_type": "custom nn.Embedding",
-    "model": "meta-llama/Llama-3-8B-Instruct"
+    "model": model_id
 })
 
-# --- Tokenizer and Model (LLaMA-3) ---
-HF_TOKEN = "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"  # You must set this properly
+# --- Tokenizer and Model ---
+tokenizer = transformers.AutoTokenizer.from_pretrained(model_id, token=HF_TOKEN)
 
-tokenizer = transformers.AutoTokenizer.from_pretrained(
-    "meta-llama/Llama-3-8B-Instruct", 
-    token=HF_TOKEN
-)
-tokenizer.pad_token = tokenizer.eos_token
+# Add special tokens
+if tokenizer.pad_token is None:
+    tokenizer.pad_token = tokenizer.eos_token
+if tokenizer.bos_token is None:
+    tokenizer.add_special_tokens({'bos_token': '<sos>'})
+if tokenizer.eos_token is None:
+    tokenizer.add_special_tokens({'eos_token': '<eos>'})
 
 model = transformers.AutoModelForCausalLM.from_pretrained(
-    "meta-llama/Llama-3-8B-Instruct", 
-    device_map="auto", 
-    torch_dtype="auto", 
-    token=HF_TOKEN
+    model_id, device_map="auto", torch_dtype="auto", token=HF_TOKEN
 )
+model.resize_token_embeddings(len(tokenizer))
 
 # --- CLIP Image Encoder ---
 from transformers import CLIPProcessor, CLIPModel
@@ -53,14 +55,13 @@ clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
 @torch.no_grad()
 def encode_image(image):
-    inputs = clip_processor(images=image, return_tensors="pt").to(DEVICE)
+    inputs = clip_processor(images=image, return_tensors="pt", do_rescale=False).to(DEVICE)
     img_emb = clip_model.get_image_features(**inputs)
     return img_emb  # shape: [1, 512]
 
-# --- Flickr30k Dataset Class ---
-from torch.utils.data import Dataset
+# --- Flickr30k Dataset ---
 class Flickr30kDataset(Dataset):
-    def __init__(self, split="train", transform=None, tokenizer_name='meta-llama/Llama-3-8B-Instruct', max_length=31):
+    def __init__(self, split="train", transform=None, max_length=MAX_CAPTION_LEN):
         self.max_length = max_length
 
         if os.path.isdir("flickr30k_" + split + "_filtered"):
@@ -71,42 +72,57 @@ class Flickr30kDataset(Dataset):
             self.dataset = dataset.remove_columns(
                 [col for col in dataset.column_names if col not in {"caption", "image"}]
             )
-            dataset.save_to_disk("flickr30k_" + split + "_filtered")
+            self.dataset.save_to_disk("flickr30k_" + split + "_filtered")
 
         self.transform = transform if transform else transforms.Compose([
             transforms.Resize((224, 224)),
             transforms.ToTensor()
         ])
 
-        self.tokenizer = transformers.AutoTokenizer.from_pretrained(tokenizer_name, use_auth_token=True)
-
     def __len__(self):
         return len(self.dataset)
 
     def __getitem__(self, idx):
         item = self.dataset[idx]
-
         image = item["image"].convert("RGB")
         image = self.transform(image)
-
         caption = str(item["caption"])
 
-        encoding = self.tokenizer(
+        encoding = tokenizer(
             caption,
             padding="max_length",
             truncation=True,
-            max_length=self.max_length,
-            return_tensors="pt"
+            max_length=self.max_length - 2,  # Reserve space for <sos> and <eos>
+            return_tensors="pt",
+            add_special_tokens=False
         )
+
+        sos_id = tokenizer.bos_token_id
+        eos_id = tokenizer.eos_token_id
+
+        input_ids = torch.cat([
+            torch.tensor([sos_id]),
+            encoding["input_ids"].squeeze(0),
+            torch.tensor([eos_id])
+        ], dim=0)
+
+        attention_mask = torch.cat([
+            torch.tensor([1]),
+            encoding["attention_mask"].squeeze(0),
+            torch.tensor([1])
+        ], dim=0)
+
+        input_ids = input_ids[:self.max_length]
+        attention_mask = attention_mask[:self.max_length]
 
         return {
             "image": image,
-            "input_ids": encoding["input_ids"].squeeze(0),
-            "attention_mask": encoding["attention_mask"].squeeze(0),
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
             "caption": caption
         }
 
-# --- Dataset & Subset Sampling ---
+# --- Dataset Loading ---
 full_dataset = Flickr30kDataset(split="train")
 total_samples = len(full_dataset)
 subset_size = int(PERCENTAGE * total_samples)
@@ -118,27 +134,23 @@ def collate(batch):
     input_ids = torch.stack([item["input_ids"] for item in batch])
     attn_mask = torch.stack([item["attention_mask"] for item in batch])
     captions = [item["caption"] for item in batch]
-
-    image_embeddings = torch.cat([encode_image(img).unsqueeze(0) for img in images], dim=0)
-
+    image_embeddings = torch.cat([encode_image(img) for img in images], dim=0)
     return input_ids, attn_mask, image_embeddings, captions
 
 dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate)
 
-# --- Apply LoRA to LLaMA-3 ---
-peft_config = LoraConfig(
-    r=8, lora_alpha=16, lora_dropout=0.05,
-    bias="none", task_type="CAUSAL_LM"
-)
+# --- LoRA ---
+peft_config = LoraConfig(r=8, lora_alpha=16, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
 model = get_peft_model(model, peft_config)
 model.print_trainable_parameters()
 
-# --- Custom Caption Embedding ---
-custom_caption_embed = nn.Embedding(tokenizer.vocab_size, model.config.hidden_size).to(DEVICE)
+# --- Custom Embedding ---
+custom_caption_embed = nn.Embedding(len(tokenizer), model.config.hidden_size).to(DEVICE)
 
-# --- Training Loop with Progress Bar ---
+# --- Optimizer ---
 optimizer = torch.optim.Adam(list(model.parameters()) + list(custom_caption_embed.parameters()), lr=2e-5)
 
+# --- Training ---
 for epoch in range(2):
     print(f"\nEpoch {epoch+1}")
     for step, (input_ids, attn_mask, img_emb, captions) in enumerate(tqdm(dataloader, desc=f"Training Epoch {epoch+1}")):
@@ -147,13 +159,14 @@ for epoch in range(2):
         img_emb = img_emb.to(DEVICE)
 
         proj = nn.Linear(img_emb.size(-1), model.config.hidden_size).to(DEVICE)
-        img_proj = proj(img_emb).unsqueeze(1)  # shape: [B, 1, hidden]
+        img_proj = proj(img_emb).unsqueeze(1)
 
         token_embeds = custom_caption_embed(input_ids)
-        inputs_embeds = torch.cat([img_proj, token_embeds], dim=1)  # prepend image token
+        inputs_embeds = torch.cat([img_proj, token_embeds], dim=1)
 
         labels = input_ids.clone()
         labels[labels == tokenizer.pad_token_id] = -100
+        labels[labels == tokenizer.bos_token_id] = -100  # mask <sos>
 
         outputs = model(inputs_embeds=inputs_embeds, labels=labels)
         loss = outputs.loss
@@ -165,19 +178,18 @@ for epoch in range(2):
 
         wandb.log({"train/loss": loss.item(), "epoch": epoch, "step": step})
 
-# --- Save Model and Upload to W&B ---
+# --- Save Model ---
 save_path = "trained_clip_llama"
 os.makedirs(save_path, exist_ok=True)
 model.save_pretrained(save_path)
 tokenizer.save_pretrained(save_path)
-custom_caption_embed_path = os.path.join(save_path, "caption_embedding.pt")
-torch.save(custom_caption_embed.state_dict(), custom_caption_embed_path)
+torch.save(custom_caption_embed.state_dict(), os.path.join(save_path, "caption_embedding.pt"))
 
 artifact = wandb.Artifact("clip-llama-captioning-model", type="model")
 artifact.add_dir(save_path)
 wandb.log_artifact(artifact)
 
-# --- Inference Example ---
+# --- Inference ---
 def generate_caption(image_path):
     img = transforms.Resize((224, 224))(Image.open(image_path).convert("RGB"))
     img = transforms.ToTensor()(img)
@@ -188,4 +200,5 @@ def generate_caption(image_path):
     generated_ids = model.generate(inputs_embeds=img_proj, max_length=MAX_CAPTION_LEN)
     return tokenizer.decode(generated_ids[0], skip_special_tokens=True)
 
-print(generate_caption("test_images/image_0.jpg"))
+#print(generate_caption("test_images/image_0.jpg"))
+print(generate_caption("image1.jpg"))
