@@ -16,8 +16,8 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 BATCH_SIZE = 4
 MAX_CAPTION_LEN = 32
 PERCENTAGE = 0.1
-model_id = "NousResearch/Llama-2-7b-chat-hf"
-HF_TOKEN = "hf_YOUR_TOKEN_HERE"  # Replace with actual token
+model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
+HF_TOKEN = "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"
 
 # --- Initialize Weights & Biases ---
 wandb.init(
@@ -35,7 +35,6 @@ wandb.init(
 # --- Tokenizer and Model ---
 tokenizer = transformers.AutoTokenizer.from_pretrained(model_id, token=HF_TOKEN)
 
-# Add special tokens
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
 if tokenizer.bos_token is None:
@@ -44,8 +43,12 @@ if tokenizer.eos_token is None:
     tokenizer.add_special_tokens({'eos_token': '<eos>'})
 
 model = transformers.AutoModelForCausalLM.from_pretrained(
-    model_id, device_map="auto", torch_dtype="auto", token=HF_TOKEN
+    model_id, 
+    device_map="auto", 
+    torch_dtype="auto", 
+    token=HF_TOKEN
 )
+
 model.resize_token_embeddings(len(tokenizer))
 
 # --- CLIP Image Encoder ---
@@ -92,7 +95,7 @@ class Flickr30kDataset(Dataset):
             caption,
             padding="max_length",
             truncation=True,
-            max_length=self.max_length - 2,  # Reserve space for <sos> and <eos>
+            max_length=self.max_length - 1,  # exclude <eos> from input
             return_tensors="pt",
             add_special_tokens=False
         )
@@ -102,23 +105,21 @@ class Flickr30kDataset(Dataset):
 
         input_ids = torch.cat([
             torch.tensor([sos_id]),
+            encoding["input_ids"].squeeze(0)
+        ], dim=0)
+
+        labels = torch.cat([
             encoding["input_ids"].squeeze(0),
             torch.tensor([eos_id])
         ], dim=0)
 
-        attention_mask = torch.cat([
-            torch.tensor([1]),
-            encoding["attention_mask"].squeeze(0),
-            torch.tensor([1])
-        ], dim=0)
-
         input_ids = input_ids[:self.max_length]
-        attention_mask = attention_mask[:self.max_length]
+        labels = labels[:self.max_length]
 
         return {
             "image": image,
             "input_ids": input_ids,
-            "attention_mask": attention_mask,
+            "labels": labels,
             "caption": caption
         }
 
@@ -132,10 +133,10 @@ dataset = Subset(full_dataset, subset_indices)
 def collate(batch):
     images = torch.stack([item["image"] for item in batch])
     input_ids = torch.stack([item["input_ids"] for item in batch])
-    attn_mask = torch.stack([item["attention_mask"] for item in batch])
+    labels = torch.stack([item["labels"] for item in batch])
     captions = [item["caption"] for item in batch]
     image_embeddings = torch.cat([encode_image(img) for img in images], dim=0)
-    return input_ids, attn_mask, image_embeddings, captions
+    return input_ids, labels, image_embeddings, captions
 
 dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate)
 
@@ -147,26 +148,29 @@ model.print_trainable_parameters()
 # --- Custom Embedding ---
 custom_caption_embed = nn.Embedding(len(tokenizer), model.config.hidden_size).to(DEVICE)
 
+# --- Shared Image Projection ---
+proj = nn.Linear(clip_model.config.projection_dim, model.config.hidden_size).to(DEVICE, dtype=model.dtype)
+
 # --- Optimizer ---
-optimizer = torch.optim.Adam(list(model.parameters()) + list(custom_caption_embed.parameters()), lr=2e-5)
+optimizer = torch.optim.Adam(list(model.parameters()) + list(custom_caption_embed.parameters()) + list(proj.parameters()), lr=2e-5)
 
 # --- Training ---
 for epoch in range(2):
     print(f"\nEpoch {epoch+1}")
-    for step, (input_ids, attn_mask, img_emb, captions) in enumerate(tqdm(dataloader, desc=f"Training Epoch {epoch+1}")):
+    for step, (input_ids, labels, img_emb, captions) in enumerate(tqdm(dataloader, desc=f"Training Epoch {epoch+1}")):
         input_ids = input_ids.to(DEVICE)
-        attn_mask = attn_mask.to(DEVICE)
+        labels = labels.to(DEVICE)
         img_emb = img_emb.to(DEVICE)
-
-        proj = nn.Linear(img_emb.size(-1), model.config.hidden_size).to(DEVICE)
-        img_proj = proj(img_emb).unsqueeze(1)
-
-        token_embeds = custom_caption_embed(input_ids)
+        img_emb = img_emb.to(dtype=proj.weight.dtype)
+        img_proj = proj(img_emb).unsqueeze(1).to(dtype=model.dtype)
+        token_embeds = custom_caption_embed(input_ids).to(dtype=model.dtype)
         inputs_embeds = torch.cat([img_proj, token_embeds], dim=1)
 
-        labels = input_ids.clone()
-        labels[labels == tokenizer.pad_token_id] = -100
-        labels[labels == tokenizer.bos_token_id] = -100  # mask <sos>
+        labels[labels == tokenizer.pad_token_id] = -100 #ignore loss on paddings
+        
+        #Ignore loss on image prefix
+        pad = torch.full((labels.size(0), 1), -100, dtype=labels.dtype, device=labels.device)
+        labels = torch.cat([pad, labels], dim=1)
 
         outputs = model(inputs_embeds=inputs_embeds, labels=labels)
         loss = outputs.loss
@@ -184,6 +188,7 @@ os.makedirs(save_path, exist_ok=True)
 model.save_pretrained(save_path)
 tokenizer.save_pretrained(save_path)
 torch.save(custom_caption_embed.state_dict(), os.path.join(save_path, "caption_embedding.pt"))
+torch.save(proj.state_dict(), os.path.join(save_path, "image_projection.pt"))
 
 artifact = wandb.Artifact("clip-llama-captioning-model", type="model")
 artifact.add_dir(save_path)
@@ -193,12 +198,11 @@ wandb.log_artifact(artifact)
 def generate_caption(image_path):
     img = transforms.Resize((224, 224))(Image.open(image_path).convert("RGB"))
     img = transforms.ToTensor()(img)
-    img_emb = encode_image(img)
-    proj = nn.Linear(img_emb.size(-1), model.config.hidden_size).to(DEVICE)
-    img_proj = proj(img_emb).unsqueeze(1)
+    img_emb = encode_image(img).to(DEVICE)
 
+    img_proj = proj(img_emb).unsqueeze(1).to(dtype=model.dtype)
     generated_ids = model.generate(inputs_embeds=img_proj, max_length=MAX_CAPTION_LEN)
     return tokenizer.decode(generated_ids[0], skip_special_tokens=True)
 
-#print(generate_caption("test_images/image_0.jpg"))
+# Example inference
 print(generate_caption("image1.jpg"))
