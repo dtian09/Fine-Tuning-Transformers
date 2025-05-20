@@ -17,7 +17,7 @@ BATCH_SIZE = 4
 MAX_CAPTION_LEN = 32
 PERCENTAGE = 0.1
 model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
-HF_TOKEN = "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"
+HF_TOKEN = 'token'
 
 # --- Initialize Weights & Biases ---
 wandb.init(
