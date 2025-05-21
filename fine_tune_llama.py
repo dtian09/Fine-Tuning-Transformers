@@ -18,7 +18,11 @@ BATCH_SIZE = 8 #4
 MAX_CAPTION_LEN = 32
 PERCENTAGE = 0.5 #50%
 model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
-HF_TOKEN = "token"
+
+#HF_TOKEN = "token"
+
+HF_TOKEN = os.getenv("HF_TOKEN") #running command: HF_TOKEN=hf_token python script.py
+
 epochs = 3
 
 # --- Authenticate Hugging Face (required for gated model access) ---
