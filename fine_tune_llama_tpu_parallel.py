@@ -1,4 +1,5 @@
 import os
+import random
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Subset, Dataset
@@ -8,7 +9,6 @@ from datasets import load_dataset, load_from_disk
 from transformers import AutoTokenizer, AutoModelForCausalLM, CLIPProcessor, CLIPModel
 from peft import get_peft_model, LoraConfig
 import wandb
-import random
 
 import torch_xla
 import torch_xla.core.xla_model as xm
@@ -20,10 +20,10 @@ os.environ["XLA_USE_BF16"] = "1"
 
 BATCH_SIZE = 8  # per core
 MAX_CAPTION_LEN = 32
-PERCENTAGE = 0.1
+PERCENTAGE = 1 #100%
 NUM_EPOCHS = 2
 model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
-HF_TOKEN = "token"
+HF_TOKEN = "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"
 
 # --- CLIP Setup ---
 clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
@@ -47,9 +47,9 @@ class Flickr30kDataset(Dataset):
         else:
             dataset = load_dataset("nlphuji/flickr30k", split="test", keep_in_memory=False)
             dataset = dataset.filter(lambda x: x["split"] == split, keep_in_memory=False)
-            self.dataset = dataset.remove_columns(
-                [col for col in dataset.column_names if col not in {"caption", "image"}]
-            )
+            self.dataset = dataset.remove_columns([
+                col for col in dataset.column_names if col not in {"caption", "image"}
+            ])
             self.dataset.save_to_disk("flickr30k_" + split + "_filtered")
 
         self.transform = transform if transform else transforms.Compose([
@@ -128,7 +128,6 @@ def train_fn(rank):
         list(model.parameters()) + list(caption_embed.parameters()) + list(proj.parameters()), lr=2e-5
     )
 
-    # Load dataset
     dataset = Flickr30kDataset(split="train")
     subset_size = int(PERCENTAGE * len(dataset))
     subset_indices = random.sample(range(len(dataset)), subset_size)
@@ -162,7 +161,6 @@ def train_fn(rank):
 
         xm.rendezvous("epoch_end")
 
-    # Save on master
     if xm.is_master_ordinal():
         os.makedirs("trained_parallel_clip_llama", exist_ok=True)
         model.save_pretrained("trained_parallel_clip_llama")
@@ -176,4 +174,4 @@ def train_fn(rank):
 
 # --- Launch Training ---
 if __name__ == "__main__":
-    xmp.spawn(train_fn, args=(), nprocs=8, start_method='fork')
+    xmp.spawn(train_fn, start_method='fork')
