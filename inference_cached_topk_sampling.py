@@ -138,7 +138,8 @@ def generate_caption(image_path):
 # --- Example ---
 if __name__ == "__main__":
     #image_path = "/content/drive/MyDrive/test_images/image_0.jpg"
-    #image_path = "/content/drive/MyDrive/test_images/image_1.jpg"    
-    image_path = "/content/drive/MyDrive/test_images/image_2.jpg" 
+    image_path = "/content/drive/MyDrive/test_images/image_1.jpg"    
+    #image_path = "/content/drive/MyDrive/test_images/image_2.jpg"
+    #image_path = "/content/drive/MyDrive/test_images/image_3.jpg"
     caption = generate_caption(image_path)
     print("Generated Caption:", caption)
