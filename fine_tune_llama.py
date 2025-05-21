@@ -13,11 +13,11 @@ from tqdm import tqdm
 
 # --- Configuration ---
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-BATCH_SIZE = 4
+BATCH_SIZE = 16 #4
 MAX_CAPTION_LEN = 32
-PERCENTAGE = 0.1
+PERCENTAGE = 0.5 #50%
 model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
-#HF_TOKEN = 'token'
+HF_TOKEN = "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"
 
 # --- Initialize Weights & Biases ---
 wandb.init(
@@ -181,28 +181,15 @@ for epoch in range(2):
         optimizer.zero_grad()
 
         wandb.log({"train/loss": loss.item(), "epoch": epoch, "step": step})
+    #model training finised at this epoch
+    # --- Save Model ---
+    save_path = "trained_clip_llama"
+    os.makedirs(save_path, exist_ok=True)
+    model.save_pretrained(save_path)
+    tokenizer.save_pretrained(save_path)
+    torch.save(custom_caption_embed.state_dict(), os.path.join(save_path, "caption_embedding.pt"))
+    torch.save(proj.state_dict(), os.path.join(save_path, "image_projection.pt"))
 
-# --- Save Model ---
-save_path = "trained_clip_llama"
-os.makedirs(save_path, exist_ok=True)
-model.save_pretrained(save_path)
-tokenizer.save_pretrained(save_path)
-torch.save(custom_caption_embed.state_dict(), os.path.join(save_path, "caption_embedding.pt"))
-torch.save(proj.state_dict(), os.path.join(save_path, "image_projection.pt"))
-
-artifact = wandb.Artifact("clip-llama-captioning-model", type="model")
-artifact.add_dir(save_path)
-wandb.log_artifact(artifact)
-
-# --- Inference ---
-def generate_caption(image_path):
-    img = transforms.Resize((224, 224))(Image.open(image_path).convert("RGB"))
-    img = transforms.ToTensor()(img)
-    img_emb = encode_image(img).to(DEVICE)
-
-    img_proj = proj(img_emb).unsqueeze(1).to(dtype=model.dtype)
-    generated_ids = model.generate(inputs_embeds=img_proj, max_length=MAX_CAPTION_LEN)
-    return tokenizer.decode(generated_ids[0], skip_special_tokens=True)
-
-# Example inference
-print(generate_caption("image1.jpg"))
+    artifact = wandb.Artifact("clip-llama-captioning-model", type="model")
+    artifact.add_dir(save_path)
+    wandb.log_artifact(artifact)
