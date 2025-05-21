@@ -10,6 +10,7 @@ import os
 from torchvision import transforms
 from PIL import Image
 from torch.nn import functional as F
+from huggingface_hub import login
 
 # --- Config ---
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -20,6 +21,9 @@ adapter_path = "trained_clip_llama"
 base_model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
 base_model_dir = "./cached_llama_model"
 hf_token = "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"
+
+# --- Authenticate Hugging Face (required for gated model access) ---
+login(token=hf_token)
 
 # --- Load Tokenizer ---
 tokenizer = AutoTokenizer.from_pretrained(adapter_path, token=hf_token)
@@ -133,6 +137,8 @@ def generate_caption(image_path):
 
 # --- Example ---
 if __name__ == "__main__":
-    image_path = "image1.jpg"
+    #image_path = "/content/drive/MyDrive/test_images/image_0.jpg"
+    #image_path = "/content/drive/MyDrive/test_images/image_1.jpg"    
+    image_path = "/content/drive/MyDrive/test_images/image_2.jpg" 
     caption = generate_caption(image_path)
     print("Generated Caption:", caption)

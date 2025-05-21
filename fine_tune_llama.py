@@ -10,6 +10,7 @@ import os
 import random
 import wandb
 from tqdm import tqdm
+from huggingface_hub import login
 
 # --- Configuration ---
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -19,6 +20,9 @@ PERCENTAGE = 0.5 #50%
 model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
 HF_TOKEN = "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"
 epochs = 3
+
+# --- Authenticate Hugging Face (required for gated model access) ---
+login(token=HF_TOKEN)
 
 # --- Initialize Weights & Biases ---
 wandb.init(
