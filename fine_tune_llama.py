@@ -18,7 +18,7 @@ BATCH_SIZE = 8 #4
 MAX_CAPTION_LEN = 32
 PERCENTAGE = 0.5 #50%
 model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
-HF_TOKEN = "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"
+HF_TOKEN = "token"
 epochs = 3
 
 # --- Authenticate Hugging Face (required for gated model access) ---
