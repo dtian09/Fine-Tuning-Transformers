@@ -13,11 +13,12 @@ from tqdm import tqdm
 
 # --- Configuration ---
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-BATCH_SIZE = 16 #4
+BATCH_SIZE = 8 #4
 MAX_CAPTION_LEN = 32
 PERCENTAGE = 0.5 #50%
 model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
 HF_TOKEN = "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"
+epochs = 3
 
 # --- Initialize Weights & Biases ---
 wandb.init(
@@ -29,7 +30,8 @@ wandb.init(
     "percentage_used": PERCENTAGE,
     "tuning_method": "LoRA",
     "embedding_type": "custom nn.Embedding",
-    "model": model_id
+    "model": model_id,
+    "epochs": epochs
 })
 
 # --- Tokenizer and Model ---
@@ -155,7 +157,7 @@ proj = nn.Linear(clip_model.config.projection_dim, model.config.hidden_size).to(
 optimizer = torch.optim.Adam(list(model.parameters()) + list(custom_caption_embed.parameters()) + list(proj.parameters()), lr=2e-5)
 
 # --- Training ---
-for epoch in range(2):
+for epoch in range(epochs):
     print(f"\nEpoch {epoch+1}")
     for step, (input_ids, labels, img_emb, captions) in enumerate(tqdm(dataloader, desc=f"Training Epoch {epoch+1}")):
         input_ids = input_ids.to(DEVICE)
