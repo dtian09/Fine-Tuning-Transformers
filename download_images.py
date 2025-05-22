@@ -22,8 +22,8 @@ else:
     # Choose one or more samples to save
 
 # Get the image and caption
-start_index = 0
-num_images = 4 #number of images with indices starting from start_index  
+start_index = 4 #0
+num_images = 5 #number of images with indices starting from start_index  
 for index in range(start_index,num_images):
     example = testset[index]
     image: Image.Image = example["image"]  # PIL Image

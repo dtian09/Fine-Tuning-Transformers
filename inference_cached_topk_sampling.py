@@ -17,16 +17,18 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 MAX_CAPTION_LEN = 32
 TOP_K = 50
 TEMPERATURE = 1.0
+#TEMPERATURE = 0.7 #more focused and fluent captions.
 adapter_path = "trained_clip_llama"
 base_model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
 base_model_dir = "./cached_llama_model"
-hf_token = "token"
+
+HF_TOKEN = os.getenv("HF_TOKEN") #running command: HF_TOKEN=hf_token python script.py
 
 # --- Authenticate Hugging Face (required for gated model access) ---
-login(token=hf_token)
+login(token=HF_TOKEN) 
 
 # --- Load Tokenizer ---
-tokenizer = AutoTokenizer.from_pretrained(adapter_path, token=hf_token)
+tokenizer = AutoTokenizer.from_pretrained(adapter_path, token=HF_TOKEN)
 tokenizer.pad_token = tokenizer.eos_token
 
 # --- Load Base Model (from disk if exists, else download and save) ---
@@ -43,7 +45,7 @@ else:
         base_model_id,
         device_map="auto",
         torch_dtype="auto",
-        token=hf_token
+        token=HF_TOKEN
     )
     os.makedirs(base_model_dir, exist_ok=True)
     base_model.save_pretrained(base_model_dir)
@@ -86,14 +88,14 @@ def sample_token(logits, temperature=1.0, top_k=50):
 
 # --- Inference with Cached QKV ---
 @torch.no_grad()
-def generate_caption(image_path):
-    # Load and preprocess image
-    img = transforms.Resize((224, 224))(Image.open(image_path).convert("RGB"))
+def generate_caption(image):
+    # Ensure image is resized and normalized
+    img = transforms.Resize((224, 224))(image.convert("RGB"))
     img = transforms.ToTensor()(img)
 
     # Encode image and project
     img_emb = encode_image(img).to(dtype=proj.weight.dtype)
-    img_proj = proj(img_emb).unsqueeze(1).to(dtype=model.dtype)  # (1, 1, hidden_dim)
+    img_proj = proj(img_emb).unsqueeze(1).to(dtype=model.dtype)
 
     # Add <sos> token
     sos_id = tokenizer.bos_token_id
@@ -102,19 +104,15 @@ def generate_caption(image_path):
     # Initial input: [img_proj, sos_embed]
     inputs_embeds = torch.cat([img_proj, sos_embed], dim=1)
 
-    # First forward pass
     outputs = model(inputs_embeds=inputs_embeds, use_cache=True)
     logits = outputs.logits
     past_key_values = outputs.past_key_values
 
-    # First sampled token
     next_token = sample_token(logits[:, -1, :], temperature=TEMPERATURE, top_k=TOP_K)
     generated = [next_token.item()]
 
-    # Loop with caching
     for _ in range(MAX_CAPTION_LEN - 2):
         token_embed = custom_caption_embed(next_token).to(dtype=model.dtype)
-        
         outputs = model(
             inputs_embeds=token_embed,
             past_key_values=past_key_values,
@@ -129,17 +127,38 @@ def generate_caption(image_path):
             break
         generated.append(token_id)
 
-    # Optional: Filter weird punctuation tokens (customize as needed)
+    # Filter out punctuation tokens (optional)
     bad_token_ids = [tokenizer.encode(t, add_special_tokens=False)[0] for t in [",", ".", "'", '"']]
     generated = [tid for tid in generated if tid not in bad_token_ids]
-    
+
     return tokenizer.decode(generated, skip_special_tokens=True)
 
-# --- Example ---
+
+from datasets import load_dataset, load_from_disk
+
 if __name__ == "__main__":
-    #image_path = "/content/drive/MyDrive/test_images/image_0.jpg"
-    image_path = "/content/drive/MyDrive/test_images/image_1.jpg"    
-    #image_path = "/content/drive/MyDrive/test_images/image_2.jpg"
-    #image_path = "/content/drive/MyDrive/test_images/image_3.jpg"
-    caption = generate_caption(image_path)
-    print("Generated Caption:", caption)
+    # --- Load Flickr30k Testset ---
+    if os.path.isdir("flickr30k_testset"):
+        testset = load_from_disk("flickr30k_testset")
+    else:
+        testset = load_dataset("nlphuji/flickr30k", split="test", keep_in_memory=False)
+        testset = testset.filter(lambda x: x["split"] == "test", keep_in_memory=False)
+        testset = testset.remove_columns(
+            [col for col in testset.column_names if col not in {"caption", "image"}]
+        )
+        testset.save_to_disk("flickr30k_testset")
+
+    # --- Run Inference on selected Test Images ---
+    start_index = 4
+    num_images = 5 #number of images to select
+    num_captions = 3 #captions per image
+
+    for idx in range(start_index, start_index + num_images):
+        sample = testset[idx]
+        image: Image.Image = sample["image"]  # PIL image
+        print(f"\n Test Image {idx}")
+        print(f"Target Caption: {sample['caption']}")
+
+        for i in range(num_captions):
+            caption = generate_caption(image)
+            print(f"Generated Caption {i+1}: {caption}")
