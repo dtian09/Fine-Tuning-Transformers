@@ -25,7 +25,7 @@ BATCH_SIZE = 16
 MAX_CAPTION_LEN = 32
 PERCENTAGE = 1
 model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
-HF_TOKEN = "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"
+HF_TOKEN = "token"
 
 # --- Authenticate Hugging Face (required for gated model access) ---
 login(token=HF_TOKEN)
