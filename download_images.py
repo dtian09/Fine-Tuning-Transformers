@@ -7,8 +7,6 @@ os.makedirs("test_images", exist_ok=True)
 
 if os.path.isdir("flickr30k_testset"):
     testset = load_from_disk("flickr30k_testset")
-    index = 0  # Change to save a different image
-    example = testset[index]
 else:  
     # Load Flickr30k dataset
     testset = load_dataset("nlphuji/flickr30k", split="test", keep_in_memory=False)
@@ -22,16 +20,15 @@ else:
 
     testset.save_to_disk("flickr30k_testset")
     # Choose one or more samples to save
-    index = 0  # Change to save a different image
-    example = testset[index]
 
 # Get the image and caption
-image: Image.Image = example["image"]  # PIL Image
-caption = example["caption"]
-filename = f"test_images/image_{index}.jpg"
-
-# Save the image
-image.save(filename)
-
-print(f"Saved image to: {filename}")
-print(f"Caption: {caption}")
+start_index = 0
+num_images = 4 #number of images with indices starting from start_index  
+for index in range(start_index,num_images):
+    example = testset[index]
+    image: Image.Image = example["image"]  # PIL Image
+    caption = example["caption"]
+    filename = f"test_images/image_{index}.jpg"
+    image.save(filename)
+    print(f"Saved image to: {filename}")
+    print(f"Caption of {filename}: {caption}")
