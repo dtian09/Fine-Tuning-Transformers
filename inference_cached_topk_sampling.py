@@ -149,8 +149,8 @@ if __name__ == "__main__":
         testset.save_to_disk("flickr30k_testset")
 
     # --- Run Inference on selected Test Images ---
-    start_index = 4
-    num_images = 5 #number of images to select
+    start_index = 3 #4
+    num_images = 1 #5 #number of images to select
     num_captions = 3 #captions per image
 
     for idx in range(start_index, start_index + num_images):
