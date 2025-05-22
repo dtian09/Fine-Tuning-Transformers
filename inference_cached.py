@@ -16,8 +16,7 @@ MAX_CAPTION_LEN = 32
 adapter_path = "trained_clip_llama"
 base_model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
 base_model_dir = "./cached_llama_model"  # local directory for caching
-hf_token = "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"
-
+hf_token = "token"
 # --- Load Tokenizer ---
 tokenizer = AutoTokenizer.from_pretrained(adapter_path, token=hf_token)
 tokenizer.pad_token = tokenizer.eos_token

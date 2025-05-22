@@ -23,7 +23,7 @@ MAX_CAPTION_LEN = 32
 PERCENTAGE = 1 #100%
 NUM_EPOCHS = 2
 model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
-HF_TOKEN = "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"
+HF_TOKEN = "token"
 
 # --- CLIP Setup ---
 clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
