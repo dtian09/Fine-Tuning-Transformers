@@ -20,7 +20,7 @@ TEMPERATURE = 1.0
 adapter_path = "trained_clip_llama"
 base_model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
 base_model_dir = "./cached_llama_model"
-hf_token = "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"
+hf_token = "token"
 
 # --- Authenticate Hugging Face (required for gated model access) ---
 login(token=hf_token)
