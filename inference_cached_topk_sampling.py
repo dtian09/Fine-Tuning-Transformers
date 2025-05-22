@@ -22,7 +22,7 @@ adapter_path = "trained_clip_llama"
 base_model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
 base_model_dir = "./cached_llama_model"
 
-HF_TOKEN = os.getenv("HF_TOKEN") #running command: HF_TOKEN=hf_token python script.py
+HF_TOKEN = os.getenv("HF_TOKEN") #running command: export HF_TOKEN=hf_token and run python script.py
 
 # --- Authenticate Hugging Face (required for gated model access) ---
 login(token=HF_TOKEN) 
